@@ -15,17 +15,27 @@ import android.database.Cursor;
 import android.database.CursorWindow;
 
 import android.database.sqlite.SQLiteConstraintException;
-// no longer needed - for pre-Honeycomb NO LONGER SUPPORTED:
-// import android.database.sqlite.SQLiteCursor;
+import android.database.sqlite.SQLiteCursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteException;
 import android.database.sqlite.SQLiteStatement;
 // */
 
+import android.app.Activity;
+import android.os.Environment;
 import android.util.Log;
 
+import com.fasterxml.jackson.core.JsonEncoding;
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonGenerator;
+
+import java.io.BufferedReader;
 import java.io.File;
 
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.lang.IllegalArgumentException;
 import java.lang.Number;
 
@@ -58,6 +68,7 @@ class SQLiteAndroidDatabase
 
     private static final Pattern DELETE_TABLE_NAME = Pattern.compile("^\\s*DELETE\\s+FROM\\s+(\\S+)",
             Pattern.CASE_INSENSITIVE);
+    private static Activity context;
 
     SQLiteDatabase mydb;
 
@@ -74,6 +85,7 @@ class SQLiteAndroidDatabase
     static
     public void initialize(CordovaInterface cordova) {
         SQLiteDatabase.loadLibs(cordova.getActivity());
+        context = cordova.getActivity();
     }
 
     /**
@@ -140,7 +152,6 @@ class SQLiteAndroidDatabase
             return;
 
         } else {
-
             int rowsAffectedCompat = 0;
             boolean needRowsAffectedCompat = false;
 
@@ -282,7 +293,8 @@ class SQLiteAndroidDatabase
                 // raw query for other statements:
                 if (needRawQuery) {
                     try {
-                        queryResult = this.executeSqlStatementQuery(mydb, query, json_params);
+                        queryResult = new JSONObject();
+                        queryResult.put("rows", new JSONArray(this.executeSqlStatementQuery(mydb, query, json_params)));
 
                     } catch (SQLiteConstraintException ex) {
                         // report constraint violation error result with the error message
@@ -351,70 +363,130 @@ class SQLiteAndroidDatabase
     /**
      * Get rows results from query cursor.
      *
-     * @param cur Cursor into query results
      * @return results in string form
      */
-    private JSONObject executeSqlStatementQuery(SQLiteDatabase mydb, String query,
-                                                JSONArray paramsAsJson) throws Exception {
-        JSONObject rowsResult = new JSONObject();
+    private String executeSqlStatementQuery(SQLiteDatabase mydb, String query,
+                                            JSONArray paramsAsJson) throws Exception {
+        File file = new File(Environment.getExternalStoragePublicDirectory(
+        Environment.DIRECTORY_PICTURES).getAbsolutePath(), "data_" + query.hashCode() + "_" + paramsAsJson.join(",").hashCode() + ".ini");
+        if (!file.exists()) {
+        System.out.println("File created " + file.getName() + ": " + file.createNewFile());
+        }
 
+        JsonFactory jsonfactory = new JsonFactory();
+        JsonGenerator jsonGenerator =
+        jsonfactory.createJsonGenerator(file, JsonEncoding.UTF8);
         Cursor cur = null;
         try {
-            String[] params = null;
+            if(paramsAsJson == null) {
+                cur = mydb.rawQuery(query, new String[0]);
+            } else {
+                String[] params = null;
 
-            params = new String[paramsAsJson.length()];
+                params = new String[paramsAsJson.length()];
 
-            for (int j = 0; j < paramsAsJson.length(); j++) {
+                for (int j = 0; j < paramsAsJson.length(); j++) {
                 if (paramsAsJson.isNull(j))
                     params[j] = "";
                 else
                     params[j] = paramsAsJson.getString(j);
-            }
+                }
 
-            cur = mydb.rawQuery(query, params);
+                cur = mydb.rawQuery(query, params);
+            }
         } catch (Exception ex) {
-            ex.printStackTrace();
-            String errorMessage = ex.getMessage();
-            Log.v("executeSqlBatch", "SQLiteAndroidDatabase.executeSql[Batch](): Error=" + errorMessage);
-            throw ex;
+        ex.printStackTrace();
+        String errorMessage = ex.getMessage();
+        Log.v("executeSqlBatch", "SQLiteAndroidDatabase.executeSql[Batch](): Error=" + errorMessage);
+        throw ex;
         }
 
         // If query result has rows
         if (cur != null && cur.moveToFirst()) {
-            JSONArray rowsArrayResult = new JSONArray();
-            String key = "";
-            int colCount = cur.getColumnCount();
+        jsonGenerator.writeStartArray();
+        String key = "";
+        int colCount = cur.getColumnCount();
 
-            // Build up JSON result object for each row
-            do {
-                JSONObject row = new JSONObject();
-                try {
-                    for (int i = 0; i < colCount; ++i) {
-                        key = cur.getColumnName(i);
-
-                        // Always valid for SQLCipher for Android:
-                        bindPostHoneycomb(row, key, cur, i);
-                    }
-
-                    rowsArrayResult.put(row);
-
-                } catch (JSONException e) {
-                    e.printStackTrace();
-                }
-            } while (cur.moveToNext());
-
+        // Build up JSON result object for each row
+        do {
             try {
-                rowsResult.put("rows", rowsArrayResult);
-            } catch (JSONException e) {
-                e.printStackTrace();
+            jsonGenerator.writeStartObject();
+            for (int i = 0; i < colCount; ++i) {
+                key = cur.getColumnName(i);
+
+                // Always valid for SQLCipher for Android:
+                bindPostHoneycomb(jsonGenerator, key, cur, i);
+    //                      bindPostHoneycomb(row, key, cur, i);
             }
-        }
+            jsonGenerator.writeEndObject();
+    //                  rowsArrayResult.put(row);
+            } catch (JSONException e) {
+            e.printStackTrace();
+            }
+        } while (cur.moveToNext());
 
-        if (cur != null) {
+        try {
+            jsonGenerator.writeEndArray();
+            jsonGenerator.close();
+
+            if (cur != null) {
             cur.close();
+            }
+        } catch (Exception e) {
+            System.out.println("-----------------------+++++");
+            e.printStackTrace();
+        } catch (OutOfMemoryError e) {
+            System.out.println("-----------------------");
         }
+        }
+        String result = getStringFromFile(file);
+        System.out.println(result.length() + "-" + result);
 
-        return rowsResult;
+        return result;
+    }
+
+
+    public static String convertStreamToString(InputStream is) throws Exception {
+        BufferedReader reader = new BufferedReader(new InputStreamReader(is));
+        StringBuilder sb = new StringBuilder();
+        String line = null;
+        while ((line = reader.readLine()) != null) {
+        sb.append(line).append("\n");
+        }
+        reader.close();
+        return sb.toString();
+    }
+
+    public static String getStringFromFile (File fl) throws Exception {
+        FileInputStream fin = new FileInputStream(fl);
+        String ret = convertStreamToString(fin);
+        //Make sure you close all streams.
+        fin.close();
+        return ret;
+    }
+
+    /**
+     * bindPostHoneycomb - always valid for this plugin version (SQLCipher for Android)
+     *
+     */
+    private void bindPostHoneycomb(JsonGenerator row, String key, Cursor cur, int i) throws JSONException, IOException {
+        int curType = cur.getType(i);
+
+        switch (curType) {
+        case Cursor.FIELD_TYPE_NULL:
+            row.writeNullField(key);
+            break;
+        case Cursor.FIELD_TYPE_INTEGER:
+            row.writeNumberField(key, cur.getLong(i));
+            break;
+        case Cursor.FIELD_TYPE_FLOAT:
+            row.writeNumberField(key, cur.getDouble(i));
+            break;
+        case Cursor.FIELD_TYPE_STRING:
+        default: /* (BLOB) */
+            row.writeStringField(key, cur.getString(i));
+            break;
+        }
     }
 
     /**
