@@ -10,6 +10,10 @@
 
 #import "sqlite3.h"
 
+
+#define READ_BLOB_AS_BASE64
+#define INCLUDE_SQL_BLOB_BINDING
+
 // Defines Macro to only log lines when in DEBUG mode
 #ifdef DEBUG
 #   define DLog(fmt, ...) NSLog((@"%s [Line %d] " fmt), __PRETTY_FUNCTION__, __LINE__, ##__VA_ARGS__);
@@ -428,6 +432,14 @@
                             columnValue = [NSNumber numberWithDouble: sqlite3_column_double(statement, i)];
                             break;
                         case SQLITE_BLOB:
+                        #ifdef READ_BLOB_AS_BASE64
+                            columnValue = [SQLitePlugin getBlobAsBase64String: sqlite3_column_blob(statement, i)
+                                                        withLength: sqlite3_column_bytes(statement, i)];
+#ifdef INCLUDE_SQL_BLOB_BINDING // TBD subjet to change:
+                            columnValue = [@"" stringByAppendingString:columnValue];
+#endif
+                            break;
+#endif // else    
                         case SQLITE_TEXT:
                             columnValue = [[NSString alloc] initWithBytes:(char *)sqlite3_column_text(statement, i)
                                                                    length:sqlite3_column_bytes(statement, i)
@@ -509,10 +521,16 @@
         } else {
             stringArg = [arg description]; // convert to text
         }
-
+        #ifdef INCLUDE_SQL_BLOB_BINDING
+        if([stringArg hasPrefix:@"sqlblob:"]){
+            
+        } else
+        #endif
+        {
         // always bind text string as UTF-8 (sqlite does internal conversion if necessary):
         NSData *data = [stringArg dataUsingEncoding:NSUTF8StringEncoding];
         bindResult = sqlite3_bind_text(statement, argIndex, data.bytes, (int)data.length, SQLITE_TRANSIENT);
+        }
     }
 
     return bindResult;
@@ -573,5 +591,18 @@
             return UNKNOWN_ERR;
     }
 }
+
+#ifdef READ_BLOB_AS_BASE64
++(NSString*)getBlobAsBase64String:(const char*)blob_chars
+                       withLength:(int)blob_length
+{
+    // THANKS for guidance: http://stackoverflow.com/a/8354941/1283667
+    NSData * data = [NSData dataWithBytes: (const void *)blob_chars length: blob_length];
+
+    // THANKS for guidance:
+    // https://github.com/apache/cordova-ios/blob/master/guides/API%20changes%20in%204.0.md#nsdatabase64h-removed
+    return [data base64EncodedStringWithOptions:0];
+}
+#endif
 
 @end /* vim: set expandtab : */
