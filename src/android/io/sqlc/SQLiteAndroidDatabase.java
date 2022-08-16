@@ -31,7 +31,6 @@ import com.fasterxml.jackson.core.JsonGenerator;
 
 import java.io.BufferedReader;
 import java.io.File;
-import android.util.Base64;
 
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -318,7 +317,7 @@ class SQLiteAndroidDatabase
                 ex.printStackTrace();
                 errorMessage = ex.getMessage();
                 Log.v("executeSqlBatch", "SQLiteAndroidDatabase.executeSql[Batch](): Error=" + errorMessage);
-            }
+            } catch ()
 
             try {
                 if (queryResult != null) {
@@ -404,44 +403,46 @@ class SQLiteAndroidDatabase
 
         // If query result has rows
         if (cur != null && cur.moveToFirst()) {
-        jsonGenerator.writeStartArray();
-        String key = "";
-        int colCount = cur.getColumnCount();
+            jsonGenerator.writeStartArray();
+            String key = "";
+            int colCount = cur.getColumnCount();
 
-        // Build up JSON result object for each row
-        do {
+            // Build up JSON result object for each row
+            do {
+                try {
+                jsonGenerator.writeStartObject();
+                for (int i = 0; i < colCount; ++i) {
+                    key = cur.getColumnName(i);
+
+                    // Always valid for SQLCipher for Android:
+                    bindPostHoneycomb(jsonGenerator, key, cur, i);
+        //                      bindPostHoneycomb(row, key, cur, i);
+                }
+                jsonGenerator.writeEndObject();
+        //                  rowsArrayResult.put(row);
+                } catch (JSONException e) {
+                e.printStackTrace();
+                }
+            } while (cur.moveToNext());
+
             try {
-            jsonGenerator.writeStartObject();
-            for (int i = 0; i < colCount; ++i) {
-                key = cur.getColumnName(i);
+                jsonGenerator.writeEndArray();
+                jsonGenerator.close();
 
-                // Always valid for SQLCipher for Android:
-                bindPostHoneycomb(jsonGenerator, key, cur, i);
-    //                      bindPostHoneycomb(row, key, cur, i);
+                if (cur != null) {
+                    cur.close();
+                }
+            } catch (Exception e) {
+                System.out.println("-----------------------+++++");
+                e.printStackTrace();
             }
-            jsonGenerator.writeEndObject();
-    //                  rowsArrayResult.put(row);
-            } catch (JSONException e) {
-            e.printStackTrace();
-            }
-        } while (cur.moveToNext());
-
+        }
+        String result;
         try {
-            jsonGenerator.writeEndArray();
-            jsonGenerator.close();
-
-            if (cur != null) {
-            cur.close();
-            }
-        } catch (Exception e) {
-            System.out.println("-----------------------+++++");
-            e.printStackTrace();
-        } catch (OutOfMemoryError e) {
-            System.out.println("-----------------------");
+            result = getStringFromFile(file);
+        } catch (OutOfMemoryError err) {
+            err.printStackTrace();
         }
-        }
-        String result = getStringFromFile(file);
-        System.out.println(result.length() + "-" + result);
 
         return result;
     }
@@ -507,9 +508,6 @@ class SQLiteAndroidDatabase
             case Cursor.FIELD_TYPE_FLOAT:
                 row.put(key, cur.getDouble(i));
                 break;
-            case Cursor.FIELD_TYPE_BLOB:
-                row.put(key, new String(Base64.encode(cur.getBlob(i), Base64.DEFAULT)));
-                break;    
             case Cursor.FIELD_TYPE_STRING:
             default: /* (BLOB) */
                 row.put(key, cur.getString(i));
